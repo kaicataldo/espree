@@ -60,7 +60,6 @@
 "use strict";
 
 var astNodeTypes = require("./lib/ast-node-types"),
-    commentAttachment = require("./lib/comment-attachment"),
     TokenTranslator = require("./lib/token-translator"),
     acornJSX = require("acorn-jsx/inject"),
     rawAcorn = require("acorn");
@@ -89,7 +88,8 @@ function resetExtra() {
         strict: false,
         ecmaFeatures: {},
         ecmaVersion: 5,
-        isModule: false
+        isModule: false,
+        nodeComments: []
     };
 }
 
@@ -134,6 +134,9 @@ function isValidNode(node) {
  * @this acorn.Parser
  */
 function esprimaFinishNode(result) {
+    var leadingCommentObj,
+        trailingCommentObj;
+
     // ensure that parsed node was allowed through ecmaFeatures
     if (!isValidNode(result)) {
         this.unexpected(result.start);
@@ -177,7 +180,41 @@ function esprimaFinishNode(result) {
     }
 
     if (extra.attachComment) {
-        commentAttachment.processComment(result);
+        result.leadingComments = [];
+        result.trailingComments = [];
+
+        for (var i = 0; i < extra.nodeComments.length; i++) {
+            if (extra.nodeComments[i].end < result.start) {
+                if (extra.nodeComments[i].hasBeenAttached === "leading") {
+                    extra.nodeComments.splice(i, 1);
+                    i--;
+                    continue;
+                }
+                leadingCommentObj = JSON.parse(JSON.stringify(extra.nodeComments[i]));
+                delete leadingCommentObj.hasBeenAttached;
+                result.leadingComments.push(leadingCommentObj);
+                extra.nodeComments[i].hasBeenAttached = "leading";
+            }
+
+            if (extra.nodeComments[i].start > result.end) {
+                if (extra.nodeComments[i].hasBeenAttached === "trailing") {
+                    extra.nodeComments.splice(i, 1);
+                    i--;
+                    continue;
+                }
+                trailingCommentObj = JSON.parse(JSON.stringify(extra.nodeComments[i]));
+                delete trailingCommentObj.hasBeenAttached;
+                result.trailingComments.push(trailingCommentObj);
+                extra.nodeComments[i].hasBeenAttached = "trailing";
+            }
+        }
+
+        if (result.leadingComments.length === 0) {
+            delete result.leadingComments;
+        }
+        if (result.trailingComments.length === 0) {
+            delete result.trailingComments;
+        }
     }
 
     if (result.type.indexOf("Function") > -1 && !result.generator) {
@@ -610,7 +647,6 @@ function parse(code, options) {
     }
 
     resetExtra();
-    commentAttachment.reset();
 
     if (typeof options !== "undefined") {
         extra.range = (typeof options.range === "boolean") && options.range;
@@ -635,7 +671,7 @@ function parse(code, options) {
         if (extra.attachComment) {
             extra.range = true;
             extra.comments = [];
-            commentAttachment.reset();
+            extra.nodeComments = [];
         }
 
         if (typeof options.ecmaVersion === "number") {
@@ -691,7 +727,7 @@ function parse(code, options) {
                 extra.comments.push(comment);
 
                 if (extra.attachComment) {
-                    commentAttachment.addComment(comment);
+                    extra.nodeComments.push(JSON.parse(JSON.stringify(comment)));
                 }
             };
         }
